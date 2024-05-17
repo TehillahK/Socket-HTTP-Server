@@ -23,3 +23,6 @@ def serve_static_file(route):
         filetype = file_type(filename)
     
     return filename , path , filetype
+
+def has_cookie(res):
+    return "Cookie" in res

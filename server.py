@@ -1,3 +1,8 @@
+#   server.py
+#   Tehillah Kangamba 7859367   
+#   Comp3010
+#   Assignment 2
+#   http server library
 import socket
 import threading
 import sys
@@ -5,8 +10,9 @@ import os
 import uuid
 import json
 import tempfile
-from cookies import Cookies
-from httpParser import file_type, serve_static_file
+from cookies import Cookies, SessionCookie
+from httpParser import file_type, get_body, has_cookie, is_api_req, serve_static_file
+from header import http_header
 
 class Server:
     def __init__(self,port) :
@@ -14,23 +20,13 @@ class Server:
         self._host = ''
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.socket.bind((self._host,self._port))
-        self.success_http ='''
-HTTP/1.1 200 OK
-Content-Length: {}
-'''     
-        self.success_img_http ='''
-HTTP/1.1 200 OK
-Content-Length: {}
-Content-Type: image/jpeg
-'''
-        self.body = '''<html>
-<body>
-<h1>You are a winner</h1>
-You are the {}nth comsomter
-</body>
-</html>
-'''
+        self._api = None
+        #self.socket.settimeout(30)
+
     #gets file name and returns file content
+    def add_api(self,api):
+        print("api added")
+        self._api = api
     def get_resource(self,resource):
         result = ""
         with open(resource) as f:
@@ -51,11 +47,11 @@ You are the {}nth comsomter
         print(filename)
         print(f"file exists {file_exists}")
         print(f"file type {filetype}")
-
+        is_api_req(route)
         if file_exists and filetype == "html":
             body = self.get_resource(file_path)
             data_length = len(body)
-            myhtml = self.success_http.format(data_length)
+            myhtml = http_header( code=200 ,message="OK",size = data_length)
             print(body)
             res = myhtml + "\n" + body
             print(res)
@@ -63,73 +59,62 @@ You are the {}nth comsomter
         elif file_exists and filetype == "jpeg":
             body = self.get_img_resource(file_path)
             data_length = len(body)
-            myhtml = self.success_http.format(data_length)
+            myhtml = http_header( code=200 ,message="OK",size = data_length,type = "image/jpeg")
             header = f"{myhtml}\n"
             res = header.encode()+ body
            #  print(res)
             result = res
-        else:
+        elif file_exists == False:
             #failed
             print("file not found")
-        # if typeReq =="GET" and route == "/":
-        #     body = self.get_resource("static/index.html")
-        #     data_length = len(body)
-        #     myhtml = self.success_http.format(data_length)
-        #     print(body)
-        #     res = myhtml + "\n" + body
-        #     print(res)
-        #     result = res.encode()
-        # elif typeReq =="GET" and route == "/images.html":
-        #     body = self.get_resource("static/images.html")
-        #     data_length = len(body)
-        #     myhtml = self.success_http.format(data_length)
-        #     res = myhtml + "\n" + body
-        #     result = res.encode()
-        # elif typeReq =="GET" and route == "/test.html":
-        #     body = self.get_resource("static/test.html")
-        #     data_length = len(body)
-        #     myhtml = self.success_http.format(data_length)
-        #     print(body)
-        #     res = myhtml + "\n" + body
-        #     print(res)
-        #     result = res.encode()
-        # elif typeReq =="GET" and route == "/images/binary.jpeg":
-        #     body = self.get_img_resource("static/images/binary.jpeg")
-        #     data_length = len(body)
-        #     myhtml = self.success_http.format(data_length)
-        #     header = f"{myhtml}\n"
-        #     res = header.encode()+ body
-        #   #  print(res)
-        #     result = res
-        # else:
-        #     failed_http = '''
-        #     HTTP/1.1 200 OK
-        #     Content-Length: {}
-        #     '''
-        #     failed_body = '''<html>
-        #     <body>
-        #     Not found
-        #     </body>
-        #     </html>
-        #     '''
-        #     data_length = len(failed_body)
-        #     myhtml = failed_http.format(data_length)
-        #     res = myhtml + "\n" + failed_body
-        #     result = res.encode()
-        #     print(result)
+            body = self.get_resource("static/NotFound.html")
+            data_length = len(body)
+            myhtml = http_header(code=404,message="Not Found",size = data_length)
+            print(body)
+            res = myhtml + "\n" + body
+            print(res)
+            result = res.encode()
+        return result
+    
+    def handle_api_req(self,type,req,body = None):
+        result = b''
+        print("handling api request")
+        if body != None:
+            self._api.set_body(body)
+        result = self._api.listen(type,req)
         return result
     
     def threading_function(self,conn):
-      #  print(f"Connected by ${addr}")
         data = conn.recv(1024)
+        res = None
+        html_body = None
         if data:
-            #print(req)
             req = data.decode()
-            print(req)
-            req = req.split()
-            req_type = req[0]
-            req_route = req[1]
-            res = self.handle_req(req_type,req_route)
+            
+            #   Check if req has a cookie
+            if has_cookie(req) == False:
+                cookie = SessionCookie()
+                res = cookie.get_cookie().encode()
+                print(res)
+                conn.sendall(res)
+
+            req_arr = req.split()
+            req_type = req_arr[0]
+            req_route = req_arr[1]
+            if req_type=="POST" or req_type=="PUT":
+                html_body = get_body(req)
+            if is_api_req(req_route) and has_cookie(req):
+                res = self.handle_api_req(req_type,req_route,body=html_body)
+            elif is_api_req(req_route) and (has_cookie(req)==False):   # user has no cookie
+                body = "user not authorized"
+                data_length = len(body)
+                myhtml = http_header(code=403,message="Not Found",size = data_length)
+                print(body)
+                res = myhtml + "\n" + body
+                print(res)
+                res = res.encode()
+            else:
+                res = self.handle_req(req_type,req_route)
             conn.sendall(res)
         
         conn.close()
@@ -140,6 +125,7 @@ You are the {}nth comsomter
         while True:
             print("Server has started")
             conn,addr = self.socket.accept()
+            
             print(f"connected ${addr}")
             new_thread = threading.Thread(target=self.threading_function,args=(conn,))
             new_thread.start()
@@ -147,10 +133,3 @@ You are the {}nth comsomter
             
             
 
-def main():
-    myServer = Server(port = int(sys.argv[1]))
-    myServer.start()
-
-if __name__ == "__main__":
-    print()
-    main()
